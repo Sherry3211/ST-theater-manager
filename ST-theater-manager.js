@@ -1,6 +1,7 @@
 // @ts-nocheck
-// 小剧场提示词管理器 v4.0
-// 更新：文件夹功能+拖拽功能+修改收藏默认置顶为可选+修复多选勾选框可见度
+// Author: discord-sherryMorii
+// 小剧场提示词管理器 v4.1
+// 修复：搜索现在可以匹配文件夹名称和文件夹内的小剧场
 
 (function() {
   'use strict';
@@ -102,6 +103,19 @@
     return { title, content: promptContent, category: categories };
   }
 
+  // ★ 检查单个小剧场是否匹配搜索条件
+  function promptMatchesSearch(p, searchText, categoryFilter) {
+    if (searchText) {
+      const matchTitle = p.title?.toLowerCase().includes(searchText);
+      const matchContent = p.content?.toLowerCase().includes(searchText);
+      const cats = normalizeCategories(p.category);
+      const matchCategory = cats.some(c => c.toLowerCase().includes(searchText));
+      if (!matchTitle && !matchContent && !matchCategory) return false;
+    }
+    if (categoryFilter && !matchesCategory(p.category, categoryFilter)) return false;
+    return true;
+  }
+
   function getFilteredPrompts(forGenerate = false) {
     const $ = getJQuery();
     let prompts = theaterData.prompts.filter(p => !p.folderId);
@@ -110,14 +124,7 @@
     const searchText = $(searchInputId).val()?.toLowerCase() || '';
     const categoryFilter = $(categoryFilterId).val();
     prompts = prompts.filter(p => {
-      if (searchText) {
-        const matchTitle = p.title?.toLowerCase().includes(searchText);
-        const matchContent = p.content?.toLowerCase().includes(searchText);
-        const cats = normalizeCategories(p.category);
-        const matchCategory = cats.some(c => c.toLowerCase().includes(searchText));
-        if (!matchTitle && !matchContent && !matchCategory) return false;
-      }
-      if (categoryFilter && !matchesCategory(p.category, categoryFilter)) return false;
+      if (!promptMatchesSearch(p, searchText, categoryFilter)) return false;
       if (!forGenerate && currentTab === 'favorites' && !p.favorite) return false;
       return true;
     });
@@ -172,7 +179,7 @@
 
     switchTab(tab) { const $ = getJQuery(); currentTab = tab; batchSelectMode = false; selectedIds.clear(); $('#theater-manager-modal .tm-tab').removeClass('active'); $(`#theater-manager-modal .tm-tab[data-tab="${tab}"]`).addClass('active'); this.renderPromptList(); },
 
-    // ★★★ 修复：只在"全部"页面显示文件夹 ★★★
+    // ★★★ v4.1 修复：搜索现在可以匹配文件夹名称和文件夹内的小剧场 ★★★
     renderPromptList() {
       const $ = getJQuery();
       if (currentTab === 'stats') { this.renderStats(); return; }
@@ -184,35 +191,71 @@
       const prompts = getFilteredPrompts();
       const folders = theaterData.folders || [];
 
+      // ★ 获取搜索词和分类筛选
+      const searchText = $('#tm-searchInput').val()?.toLowerCase() || '';
+      const categoryFilter = $('#tm-categoryFilter').val();
+
       if (batchSelectMode) { $('#tm-batchActions').show(); $('#tm-batchCount').text(selectedIds.size); }
       else { $('#tm-batchActions').hide(); }
 
       let html = '';
+      let hasVisibleFolder = false;
 
-      // ★ 修复：只在"全部"标签页渲染文件夹
+      // ★ 修复：只在"全部"标签页渲染文件夹，并添加搜索过滤
       if (currentTab === 'all') {
         folders.forEach(folder => {
           const folderPrompts = getFolderPrompts(folder.id);
-          const isExpanded = expandedFolders.has(folder.id);
+
+          // ★ 检查文件夹名称是否匹配搜索词
+          const folderNameMatch = !searchText || folder.name.toLowerCase().includes(searchText);
+
+          // ★ 检查文件夹内是否有匹配的小剧场
+          const matchingPromptsInFolder = folderPrompts.filter(p => promptMatchesSearch(p, searchText, categoryFilter));
+
+          // ★ 如果文件夹名称不匹配，且文件夹内没有匹配的小剧场，跳过
+          if (searchText && !folderNameMatch && matchingPromptsInFolder.length === 0) {
+            return;
+          }
+
+          // ★ 如果有分类筛选但文件夹内没有匹配项，跳过
+          if (categoryFilter && matchingPromptsInFolder.length === 0) {
+            return;
+          }
+
+          hasVisibleFolder = true;
+
+          // ★ 如果是通过内容搜索匹配到的，自动展开文件夹
+          const shouldAutoExpand = (searchText || categoryFilter) && matchingPromptsInFolder.length > 0;
+          const isExpanded = expandedFolders.has(folder.id) || shouldAutoExpand;
+
+          // ★ 决定显示哪些小剧场（搜索/筛选时只显示匹配的，否则显示全部）
+          const displayPrompts = (searchText || categoryFilter) ? matchingPromptsInFolder : folderPrompts;
+
+          // ★ 计数显示
+          const countDisplay = (searchText || categoryFilter)
+            ? `${matchingPromptsInFolder.length}/${folderPrompts.length}`
+            : `${folderPrompts.length}`;
+
           html += `
             <div class="folder-card ${isExpanded ? 'expanded' : ''}" data-id="${folder.id}">
               <div class="folder-header" data-folder-id="${folder.id}">
                 <span class="tm-drag-handle">☰</span>
                 <span class="folder-icon">${isExpanded ? '📂' : '📁'}</span>
                 <span class="folder-name">${escapeHtml(folder.name)}</span>
-                <span class="folder-count">${folderPrompts.length}</span>
+                <span class="folder-count">${countDisplay}</span>
                 <div class="folder-actions">
                   <button class="card-btn" data-action="editFolder" data-id="${folder.id}">✏️</button>
                   <button class="card-btn card-btn-danger" data-action="deleteFolder" data-id="${folder.id}">🗑️</button>
                 </div>
               </div>
-              ${isExpanded ? `<div class="folder-content">${folderPrompts.map(p => this.renderPromptCard(p)).join('')}</div>` : ''}
+              ${isExpanded ? `<div class="folder-content">${displayPrompts.map(p => this.renderPromptCard(p)).join('')}</div>` : ''}
             </div>
           `;
         });
       }
 
-      if (prompts.length === 0 && (currentTab !== 'all' || folders.length === 0)) {
+      // ★ 空状态判断修复
+      if (prompts.length === 0 && !hasVisibleFolder) {
         html = `<div class="tm-empty">🔍<p>${currentTab === 'favorites' ? '还没有收藏' : '没有找到'}</p></div>`;
       } else {
         html += prompts.map(p => this.renderPromptCard(p)).join('');
@@ -258,14 +301,14 @@
     moveToFolder(promptId) { const $ = getJQuery(); const prompt = theaterData.prompts.find(p => p.id === promptId); if (!prompt) return; $('#tm-moveToFolderModal').remove(); const folders = theaterData.folders || []; $('body').append(`<div id="tm-moveToFolderModal" class="tm-modal-overlay"><div class="tm-modal" style="max-width:400px;"><div class="tm-modal-header"><h2>📁 移动到文件夹</h2><button class="tm-modal-close tm-move-action" data-action="closeMoveModal">×</button></div><div class="tm-modal-body"><p style="margin-bottom:12px;color:var(--tm-text-muted);">「${escapeHtml(prompt.title)}」</p><div class="folder-select-list"><div class="folder-select-item ${!prompt.folderId ? 'active' : ''}" data-folder-id=""><span>📋 不在文件夹中</span></div>${folders.map(f => `<div class="folder-select-item ${prompt.folderId === f.id ? 'active' : ''}" data-folder-id="${f.id}"><span>📁 ${escapeHtml(f.name)}</span><span class="folder-select-count">${getFolderPrompts(f.id).length}</span></div>`).join('')}</div></div><div class="tm-modal-footer"><button class="tm-btn tm-btn-secondary tm-move-action" data-action="closeMoveModal">取消</button></div></div></div>`); $('#tm-moveToFolderModal').on('click', '.folder-select-item', async function() { const folderId = $(this).data('folder-id'); if (folderId) { prompt.folderId = folderId; } else { delete prompt.folderId; } await saveData(); TheaterManager.closeMoveModal(); TheaterManager.renderPromptList(); }); },
     closeMoveModal() { getJQuery()('#tm-moveToFolderModal').remove(); },
 
-    renderGeneratePage() { const $ = getJQuery(); const container = $('#tm-promptList'); const categories = getAllCategories(); container.html(`<div class="gen-page"><div class="gen-toolbar"><input type="text" id="tm-genSearchInput" placeholder="🔍 搜索小剧场..."><select id="tm-genCategoryFilter"><option value="">全部分类</option>${categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></div><div id="tm-genPromptList" class="gen-prompt-list"></div><div id="tm-genResultArea" class="gen-result-area" style="display:none;"><div class="gen-result-header"><h3>🎬 演绎结果</h3><div class="gen-result-btns"><button class="tm-btn tm-btn-small tm-btn-secondary tm-gen-action" data-action="backToList">← 返回</button></div></div><div id="tm-genResultContent" class="gen-result-content"></div><div id="tm-genResultActions" class="gen-result-actions" style="display:none;"><button class="tm-btn tm-btn-secondary tm-gen-action" data-action="copyResult">📋 复制</button><button class="tm-btn tm-btn-secondary tm-gen-action" data-action="insertResultToInput">📝 插入输入框</button><button class="tm-btn tm-btn-primary tm-gen-action" data-action="regenerate">🔄 重新演绎</button></div></div></div>`); this.renderGenPromptList(); },
-    renderGenPromptList() { const $ = getJQuery(); const container = $('#tm-genPromptList'); const prompts = getFilteredPrompts(true); if (prompts.length === 0) { container.html(`<div class="tm-empty-small">没有找到小剧场</div>`); return; } container.html(prompts.map(p => `<div class="gen-prompt-card ${p.favorite ? 'favorite' : ''}" data-id="${p.id}"><div class="gen-card-info"><div class="gen-card-title">${p.favorite ? '⭐ ' : ''}${escapeHtml(p.title)}</div><div class="gen-card-categories">${renderCategoryTags(p.category)}</div><div class="gen-card-preview">${escapeHtml(p.content?.substring(0, 60) || '')}${(p.content?.length || 0) > 60 ? '...' : ''}</div></div><div class="gen-card-btns"><button class="tm-btn tm-btn-small tm-btn-secondary tm-gen-action" data-action="previewBeforeGen" data-id="${p.id}">👁️</button><button class="tm-btn tm-btn-small tm-btn-primary tm-gen-action" data-action="startGenerate" data-id="${p.id}">🎬 演绎</button></div></div>`).join('')); },
+    renderGeneratePage() { const $ = getJQuery(); const container = $('#tm-promptList'); const categories = getAllCategories(); container.html(`<div class="gen-page"><div class="gen-toolbar"><input type="text" id="tm-genSearchInput" placeholder="🔍 搜索小剧场..."><select id="tm-genCategoryFilter"><option value="">全部分类</option>${categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></div><div id="tm-genPromptList" class="gen-prompt-list"></div><div id="tm-genResultArea" class="gen-result-area" style="display:none;"><div class="gen-result-header"><h3>🎬 生成结果</h3><div class="gen-result-btns"><button class="tm-btn tm-btn-small tm-btn-secondary tm-gen-action" data-action="backToList">← 返回</button></div></div><div id="tm-genResultContent" class="gen-result-content"></div><div id="tm-genResultActions" class="gen-result-actions" style="display:none;"><button class="tm-btn tm-btn-secondary tm-gen-action" data-action="copyResult">📋 复制</button><button class="tm-btn tm-btn-secondary tm-gen-action" data-action="insertResultToInput">📝 插入输入框</button><button class="tm-btn tm-btn-primary tm-gen-action" data-action="regenerate">🔄 重新生成</button></div></div></div>`); this.renderGenPromptList(); },
+    renderGenPromptList() { const $ = getJQuery(); const container = $('#tm-genPromptList'); const prompts = getFilteredPrompts(true); if (prompts.length === 0) { container.html(`<div class="tm-empty-small">没有找到小剧场</div>`); return; } container.html(prompts.map(p => `<div class="gen-prompt-card ${p.favorite ? 'favorite' : ''}" data-id="${p.id}"><div class="gen-card-info"><div class="gen-card-title">${p.favorite ? '⭐ ' : ''}${escapeHtml(p.title)}</div><div class="gen-card-categories">${renderCategoryTags(p.category)}</div><div class="gen-card-preview">${escapeHtml(p.content?.substring(0, 60) || '')}${(p.content?.length || 0) > 60 ? '...' : ''}</div></div><div class="gen-card-btns"><button class="tm-btn tm-btn-small tm-btn-secondary tm-gen-action" data-action="previewBeforeGen" data-id="${p.id}">👁️</button><button class="tm-btn tm-btn-small tm-btn-primary tm-gen-action" data-action="startGenerate" data-id="${p.id}">🎬 生成</button></div></div>`).join('')); },
     filterGenPrompts() { this.renderGenPromptList(); },
     previewBeforeGen(id) { this.showPreview(id); },
-    showGenMacroModal(id) { const $ = getJQuery(); const prompt = theaterData.prompts.find(p => p.id === id); if (!prompt) return; $('#tm-genMacroModal').remove(); $('body').append(`<div id="tm-genMacroModal" class="tm-modal-overlay"><div class="tm-modal" style="max-width:500px;"><div class="tm-modal-header"><h2>🎬 后台演绎</h2><button class="tm-modal-close tm-gen-macro-action" data-action="closeGenMacroModal">×</button></div><div class="tm-modal-body"><p style="margin-bottom:12px;font-weight:600;color:var(--tm-text);">${escapeHtml(prompt.title)}</p><div class="form-group"><label>角色名 →</label><input type="text" id="tm-genMacroChar" class="form-input" value="${escapeHtml(currentCharacter || '角色')}"></div><div class="form-group"><label>用户名 →</label><input type="text" id="tm-genMacroUser" class="form-input" value="${escapeHtml(currentUser || '用户')}"></div><div class="form-group"><label>预览</label><div id="tm-genMacroPreview" class="preview-box preview-small">${escapeHtml(replaceMacros(prompt.content))}</div></div></div><div class="tm-modal-footer"><button class="tm-btn tm-btn-secondary tm-gen-macro-action" data-action="closeGenMacroModal">取消</button><button class="tm-btn tm-btn-primary tm-gen-macro-action" data-action="confirmGenerate" data-id="${id}">🎬 开始演绎</button></div></div></div>`); const updatePreview = () => { $('#tm-genMacroPreview').text(replaceMacros(prompt.content, $('#tm-genMacroChar').val(), $('#tm-genMacroUser').val())); }; $('#tm-genMacroChar, #tm-genMacroUser').on('input', updatePreview); },
+    showGenMacroModal(id) { const $ = getJQuery(); const prompt = theaterData.prompts.find(p => p.id === id); if (!prompt) return; $('#tm-genMacroModal').remove(); $('body').append(`<div id="tm-genMacroModal" class="tm-modal-overlay"><div class="tm-modal" style="max-width:500px;"><div class="tm-modal-header"><h2>🎬 后台生成</h2><button class="tm-modal-close tm-gen-macro-action" data-action="closeGenMacroModal">×</button></div><div class="tm-modal-body"><p style="margin-bottom:12px;font-weight:600;color:var(--tm-text);">${escapeHtml(prompt.title)}</p><div class="form-group"><label>角色名 →</label><input type="text" id="tm-genMacroChar" class="form-input" value="${escapeHtml(currentCharacter || '角色')}"></div><div class="form-group"><label>用户名 →</label><input type="text" id="tm-genMacroUser" class="form-input" value="${escapeHtml(currentUser || '用户')}"></div><div class="form-group"><label>预览</label><div id="tm-genMacroPreview" class="preview-box preview-small">${escapeHtml(replaceMacros(prompt.content))}</div></div></div><div class="tm-modal-footer"><button class="tm-btn tm-btn-secondary tm-gen-macro-action" data-action="closeGenMacroModal">取消</button><button class="tm-btn tm-btn-primary tm-gen-macro-action" data-action="confirmGenerate" data-id="${id}">🎬 开始生成</button></div></div></div>`); const updatePreview = () => { $('#tm-genMacroPreview').text(replaceMacros(prompt.content, $('#tm-genMacroChar').val(), $('#tm-genMacroUser').val())); }; $('#tm-genMacroChar, #tm-genMacroUser').on('input', updatePreview); },
     closeGenMacroModal() { getJQuery()('#tm-genMacroModal').remove(); },
     startGenerate(id) { this.showGenMacroModal(id); },
-    async confirmGenerate(id) { const $ = getJQuery(); const prompt = theaterData.prompts.find(p => p.id === id); if (!prompt) return; const charVal = $('#tm-genMacroChar').val(); const userVal = $('#tm-genMacroUser').val(); const processedContent = replaceMacros(prompt.content, charVal, userVal); this.closeGenMacroModal(); currentGenerationPromptId = id; $('#tm-genPromptList').hide(); $('.gen-toolbar').hide(); $('#tm-genResultArea').show(); $('#tm-genResultActions').hide(); $('#tm-genResultContent').html(`<div class="gen-loading"><div class="gen-loading-spinner"></div><p>正在演绎中...</p><p class="gen-loading-tip">「${escapeHtml(prompt.title)}」</p></div>`); isGenerating = true; try { const result = await triggerSlashWithResult(`/gen lock=on ${processedContent}`); isGenerating = false; if (result) { theaterData.generationHistory = theaterData.generationHistory || []; theaterData.generationHistory.unshift({ promptId: id, promptTitle: prompt.title, input: processedContent, output: result, time: Date.now() }); theaterData.generationHistory = theaterData.generationHistory.slice(0, 50); await saveData(); this.recordUsage(id); $('#tm-genResultContent').html(`<div class="gen-success"><div class="gen-success-header"><span class="gen-success-icon">✨</span><span>演绎完成</span></div><div class="gen-output-box">${escapeHtml(result)}</div></div>`); $('#tm-genResultActions').show(); getParentWindow()._tmLastGenResult = result; } else { $('#tm-genResultContent').html(`<div class="gen-error"><span class="gen-error-icon">⚠️</span><p>演绎失败或返回为空</p></div>`); } } catch (e) { isGenerating = false; $('#tm-genResultContent').html(`<div class="gen-error"><span class="gen-error-icon">❌</span><p>演绎出错</p></div>`); } },
+    async confirmGenerate(id) { const $ = getJQuery(); const prompt = theaterData.prompts.find(p => p.id === id); if (!prompt) return; const charVal = $('#tm-genMacroChar').val(); const userVal = $('#tm-genMacroUser').val(); const processedContent = replaceMacros(prompt.content, charVal, userVal); this.closeGenMacroModal(); currentGenerationPromptId = id; $('#tm-genPromptList').hide(); $('.gen-toolbar').hide(); $('#tm-genResultArea').show(); $('#tm-genResultActions').hide(); $('#tm-genResultContent').html(`<div class="gen-loading"><div class="gen-loading-spinner"></div><p>正在生成中...</p><p class="gen-loading-tip">「${escapeHtml(prompt.title)}」</p></div>`); isGenerating = true; try { const result = await triggerSlashWithResult(`/gen lock=on ${processedContent}`); isGenerating = false; if (result) { theaterData.generationHistory = theaterData.generationHistory || []; theaterData.generationHistory.unshift({ promptId: id, promptTitle: prompt.title, input: processedContent, output: result, time: Date.now() }); theaterData.generationHistory = theaterData.generationHistory.slice(0, 50); await saveData(); this.recordUsage(id); $('#tm-genResultContent').html(`<div class="gen-success"><div class="gen-success-header"><span class="gen-success-icon">✨</span><span>生成完成</span></div><div class="gen-output-box">${escapeHtml(result)}</div></div>`); $('#tm-genResultActions').show(); getParentWindow()._tmLastGenResult = result; } else { $('#tm-genResultContent').html(`<div class="gen-error"><span class="gen-error-icon">⚠️</span><p>生成失败或返回为空</p></div>`); } } catch (e) { isGenerating = false; $('#tm-genResultContent').html(`<div class="gen-error"><span class="gen-error-icon">❌</span><p>生成出错</p></div>`); } },
     backToList() { const $ = getJQuery(); $('#tm-genResultArea').hide(); $('#tm-genPromptList').show(); $('.gen-toolbar').show(); currentGenerationPromptId = null; },
     async copyResult() { const result = getParentWindow()._tmLastGenResult; if (result) { await copyToClipboard(result); alert('✅ 已复制'); } },
     async insertResultToInput() { const result = getParentWindow()._tmLastGenResult; if (result) { await triggerSlash(`/setinput ${result}`); this.closeModal(); } },
@@ -275,7 +318,7 @@
 
     renderStats() { const $ = getJQuery(); const container = $('#tm-promptList'); const prompts = theaterData.prompts; const totalPrompts = prompts.length; const totalUses = prompts.reduce((sum, p) => sum + (p.useCount || 0), 0); const favorites = prompts.filter(p => p.favorite).length; const folders = theaterData.folders?.length || 0; const categoryStats = {}; prompts.forEach(p => { const cats = normalizeCategories(p.category); if (cats.length === 0) { if (!categoryStats['未分类']) categoryStats['未分类'] = { count: 0, uses: 0 }; categoryStats['未分类'].count++; categoryStats['未分类'].uses += p.useCount || 0; } else { cats.forEach(cat => { if (!categoryStats[cat]) categoryStats[cat] = { count: 0, uses: 0 }; categoryStats[cat].count++; categoryStats[cat].uses += p.useCount || 0; }); } }); const sortedCategories = Object.entries(categoryStats).sort((a, b) => b[1].uses - a[1].uses).slice(0, 8); const maxUses = Math.max(...sortedCategories.map(c => c[1].uses), 1); const topUsed = [...prompts].sort((a, b) => (b.useCount || 0) - (a.useCount || 0)).slice(0, 5); container.html(`<div class="stats-grid"><div class="stat-card"><div class="stat-value">${totalPrompts}</div><div class="stat-label">总数量</div></div><div class="stat-card"><div class="stat-value">${totalUses}</div><div class="stat-label">总使用</div></div><div class="stat-card"><div class="stat-value">${favorites}</div><div class="stat-label">收藏</div></div><div class="stat-card"><div class="stat-value">${folders}</div><div class="stat-label">文件夹</div></div></div><div class="stats-section"><h3>📊 分类分布</h3><div class="category-bars">${sortedCategories.map(([cat, data]) => `<div class="category-bar-item"><div class="category-bar-label">${escapeHtml(cat)}</div><div class="category-bar-track"><div class="category-bar-fill" style="width:${(data.uses/maxUses*100)}%"></div></div><div class="category-bar-value">${data.uses}次</div></div>`).join('')}</div></div><div class="stats-section"><h3>🏆 最常使用</h3>${topUsed.length > 0 ? topUsed.map((p, i) => `<div class="top-item"><div class="top-rank">${['🥇','🥈','🥉','4','5'][i]}</div><div class="top-info"><div class="top-title">${escapeHtml(p.title)}</div><div class="top-stats">${p.useCount || 0}次</div></div><button class="card-btn" data-action="showPreview" data-id="${p.id}">👁️</button></div>`).join('') : '<div class="tm-empty-small">还没有使用记录</div>'}</div>`); },
 
-    renderSettings() { const $ = getJQuery(); const container = $('#tm-promptList'); const currentTheme = theaterData.theme || 'dark'; const favoriteOnTop = theaterData.settings?.favoriteOnTop !== false; container.html(`<div class="settings-page"><div class="settings-section"><h3>⚙️ 排序设置</h3><div class="settings-toggle"><label class="toggle-label"><input type="checkbox" id="tm-favoriteOnTop" ${favoriteOnTop ? 'checked' : ''}><span class="toggle-text">收藏自动置顶</span></label><p class="toggle-desc">关闭后收藏不再置顶，按使用频率排序</p></div></div><div class="settings-section"><h3>🎨 主题切换</h3><div class="theme-grid">${Object.entries(themes).map(([key, theme]) => `<div class="theme-card ${currentTheme === key ? 'active' : ''}" data-theme="${key}"><div class="theme-preview" style="background:${theme.bg}"><div class="theme-preview-header" style="background:${theme.header}"></div></div><div class="theme-name">${theme.name}</div></div>`).join('')}</div></div><div class="settings-section"><h3>💾 数据管理</h3><div class="settings-btns"><button class="tm-btn tm-btn-primary tm-setting-action" data-action="exportToJSON">📤 导出</button><button class="tm-btn tm-btn-secondary tm-setting-action" data-action="importFromJSON">📥 恢复</button></div></div><div class="settings-section"><h3>ℹ️ 关于</h3><div class="about-info"><p>🎭 小剧场管理器 v4.0</p><p class="about-muted">文件夹 | 拖动排序 | 多分类</p></div></div></div>`); $('#tm-favoriteOnTop').on('change', async function() { theaterData.settings.favoriteOnTop = $(this).is(':checked'); await saveData(); }); },
+    renderSettings() { const $ = getJQuery(); const container = $('#tm-promptList'); const currentTheme = theaterData.theme || 'dark'; const favoriteOnTop = theaterData.settings?.favoriteOnTop !== false; container.html(`<div class="settings-page"><div class="settings-section"><h3>⚙️ 排序设置</h3><div class="settings-toggle"><label class="toggle-label"><input type="checkbox" id="tm-favoriteOnTop" ${favoriteOnTop ? 'checked' : ''}><span class="toggle-text">收藏自动置顶</span></label><p class="toggle-desc">关闭后收藏不再置顶，按使用频率排序</p></div></div><div class="settings-section"><h3>🎨 主题切换</h3><div class="theme-grid">${Object.entries(themes).map(([key, theme]) => `<div class="theme-card ${currentTheme === key ? 'active' : ''}" data-theme="${key}"><div class="theme-preview" style="background:${theme.bg}"><div class="theme-preview-header" style="background:${theme.header}"></div></div><div class="theme-name">${theme.name}</div></div>`).join('')}</div></div><div class="settings-section"><h3>💾 数据管理</h3><div class="settings-btns"><button class="tm-btn tm-btn-primary tm-setting-action" data-action="exportToJSON">📤 导出</button><button class="tm-btn tm-btn-secondary tm-setting-action" data-action="importFromJSON">📥 恢复</button></div></div><div class="settings-section"><h3>ℹ️ 关于</h3><div class="about-info"><p>🎭 小剧场管理器 v4.1</p><p class="about-muted">文件夹搜索 | 拖动排序 | 多分类</p></div></div></div>`); $('#tm-favoriteOnTop').on('change', async function() { theaterData.settings.favoriteOnTop = $(this).is(':checked'); await saveData(); }); },
 
     updateCategoryFilter() { const $ = getJQuery(); const categories = getAllCategories(); $('#tm-categoryFilter').html('<option value="">全部分类</option>' + categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')); },
     filterPrompts() { this.renderPromptList(); },
@@ -363,7 +406,7 @@
           <div class="tm-header"><h1>🎭 小剧场管理器</h1><div class="tm-header-btns"><button class="tm-hbtn tm-hbtn-primary tm-header-action" data-action="openAddModal">➕</button><button class="tm-hbtn tm-hbtn-folder tm-header-action" data-action="openFolderModal">📁</button><button class="tm-hbtn tm-hbtn-accent tm-header-action" data-action="importFromTxt">📋</button><button class="tm-hbtn tm-header-action" data-action="randomPick">🎲</button><button class="tm-hbtn tm-header-action" id="tm-batchModeBtn" data-action="toggleBatchMode">☑️</button><button class="tm-hbtn tm-header-action" data-action="closeModal">✕</button></div></div>
           <div class="tm-toolbar"><input type="text" id="tm-searchInput" placeholder="🔍 搜索..."><select id="tm-categoryFilter"><option value="">全部分类</option></select></div>
           <div id="tm-batchActions" class="tm-batch-bar" style="display:none;"><span>已选 <strong id="tm-batchCount">0</strong></span><button class="tm-btn tm-btn-small tm-batch-action" data-action="toggleSelectAll">全选</button><button class="tm-btn tm-btn-small tm-btn-primary tm-batch-action" data-action="openBatchEditModal">改分类</button><button class="tm-btn tm-btn-small tm-btn-danger tm-batch-action" data-action="batchDelete">删除</button></div>
-          <div class="tm-tabs"><div class="tm-tab active" data-tab="all">📋 全部</div><div class="tm-tab" data-tab="favorites">⭐ 收藏</div><div class="tm-tab" data-tab="generate">🎬 演绎</div><div class="tm-tab" data-tab="history">🕐 历史</div><div class="tm-tab" data-tab="stats">📊 统计</div><div class="tm-tab" data-tab="settings">⚙️ 设置</div></div>
+          <div class="tm-tabs"><div class="tm-tab active" data-tab="all">📋 全部</div><div class="tm-tab" data-tab="favorites">⭐ 收藏</div><div class="tm-tab" data-tab="generate">🎬 生成</div><div class="tm-tab" data-tab="history">🕐 历史</div><div class="tm-tab" data-tab="stats">📊 统计</div><div class="tm-tab" data-tab="settings">⚙️ 设置</div></div>
           <div id="tm-promptList" class="tm-content"></div>
           <div id="tm-undo-bar" class="tm-undo-bar"></div>
         </div>
@@ -434,40 +477,10 @@
       .prompt-card.favorite{border-left:3px solid #ffd43b}
       .prompt-card.selected{background:rgba(102,126,234,0.12);border-color:var(--tm-accent)}
 
-      /* ★★★ 修复：自定义多选勾选框样式，增强可见度 ★★★ */
-      .prompt-card .tm-batch-check{
-        width:22px;
-        height:22px;
-        margin-top:2px;
-        cursor:pointer;
-        flex-shrink:0;
-        appearance:none;
-        -webkit-appearance:none;
-        background:rgba(0,0,0,0.4);
-        border:2px solid rgba(255,255,255,0.6);
-        border-radius:5px;
-        position:relative;
-        transition:all 0.15s;
-      }
-      .prompt-card .tm-batch-check:hover{
-        border-color:#667eea;
-        background:rgba(102,126,234,0.3);
-        box-shadow:0 0 6px rgba(102,126,234,0.5);
-      }
-      .prompt-card .tm-batch-check:checked{
-        background:linear-gradient(135deg,#667eea,#764ba2);
-        border-color:#667eea;
-      }
-      .prompt-card .tm-batch-check:checked::after{
-        content:'✓';
-        position:absolute;
-        top:50%;
-        left:50%;
-        transform:translate(-50%,-50%);
-        color:#fff;
-        font-size:14px;
-        font-weight:bold;
-      }
+      .prompt-card .tm-batch-check{width:22px;height:22px;margin-top:2px;cursor:pointer;flex-shrink:0;appearance:none;-webkit-appearance:none;background:rgba(0,0,0,0.4);border:2px solid rgba(255,255,255,0.6);border-radius:5px;position:relative;transition:all 0.15s}
+      .prompt-card .tm-batch-check:hover{border-color:#667eea;background:rgba(102,126,234,0.3);box-shadow:0 0 6px rgba(102,126,234,0.5)}
+      .prompt-card .tm-batch-check:checked{background:linear-gradient(135deg,#667eea,#764ba2);border-color:#667eea}
+      .prompt-card .tm-batch-check:checked::after{content:'✓';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:14px;font-weight:bold}
 
       .card-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
       .card-row-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -670,10 +683,9 @@
     if (!extensionsMenu.length) { setTimeout(initIntegration, 500); return; }
     extensionsMenu.append(`<a id="theater-manager-menu-item" class="list-group-item" href="#" title="小剧场管理器"><i class="fa-solid fa-theater-masks"></i> 小剧场管理器</a>`);
     $('#theater-manager-menu-item').on('click', function(e) { e.preventDefault(); e.stopPropagation(); $('#extensionsMenu').fadeOut(200); createTheaterManagerUI(); });
-    console.log('✅ 小剧场管理器 v4.0 已加载');
+    console.log('✅ 小剧场管理器 v4.1 已加载');
   }
 
   function start() { const $ = getJQuery(); if ($ && $('#extensionsMenu').length) initIntegration(); else setTimeout(start, 500); }
   start();
 })();
-
